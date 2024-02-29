@@ -15,12 +15,15 @@
 MFRC522 rfid(SS_PIN, RST_PIN);
 
 //ขั้นตอนการลงทะเบียน กดฟังชั่นสัมติง -> เเตะบัตรที่ต้องการ -> ทำการเข้าสู่โหมดลงทะเบียน
-
+int mode = 3;
 uint8_t MacAddress1[] = {0xE8, 0x68, 0xE7, 0x23, 0x82, 0x1C}; //led
-uint8_t MacAddress2[] = {0xE8, 0xDB, 0x84, 0x00, 0xFB, 0x3C}; //Oled
+uint8_t MacAddress2[] = {0x24, 0x6F, 0x28, 0x28, 0x15, 0x94}; //Oled
 uint8_t MacAddress3[] = {0x3C, 0x61, 0x05, 0x03, 0xCA, 0x04}; //Pin
 uint8_t MacAddress4[] = {0x24, 0x6F, 0x28, 0x28, 0x17, 0x1C}; //Servo
 
+int oled_tap_card = 0;
+int mode0 = 0;
+int mode1 = 0;
 struct RFIDTag {    
   char uid[15];
   char *name;
@@ -34,7 +37,7 @@ RFIDTag tags[] = {  //ข้อมูลพนักงงาน เปลี่
   {"03aa091b", "player 3",0,NULL},
   {"86774f49", "player 4",0,NULL},
   {"63e68ffb", "player 5",0,NULL},
-  {"860c1e49", "player 6",2,NULL},
+  {"860c1e49", "player 6",0,NULL},
 };
 // 0(ปิด) 1(กำลังลงทะเบียน) 2(ลงทะเบียนเเล้ว)
 byte totalTags = sizeof(tags) / sizeof(RFIDTag);
@@ -93,11 +96,31 @@ bool compareMac(const uint8_t * a, uint8_t * b){
 typedef struct send_mode1{
   int statuss;
 } send_mode1;
+
+typedef struct send_mode{
+  int statuss; // 0 regis 1 reset 2 forget card 3 reset complete 4 register complete
+}send_mode;
+
+typedef struct send_servo1{
+  int statuss;
+}send_servo1;
+
+typedef struct send_oled{
+  int statuss;
+}send_oled;
+
+
+
+typedef struct servo_struct{
+  int servo_status;//1 = lock, 0 = unlock
+} servo_struct;
+
 send_mode1 test;
 send_mode1 led;
-send_mode1 servo;
-send_mode1 olde;
+send_servo1 servo;
+send_oled oled;
 send_mode1 pin;
+send_mode repin;
 esp_now_peer_info_t peerInfo1; // Led
 esp_now_peer_info_t peerInfo2; // Olde
 esp_now_peer_info_t peerInfo3; // Pin
@@ -130,11 +153,35 @@ void OnDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len) 
            mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
   Serial.println(macStr);
   //receive data
-  memcpy(&test, incomingData, sizeof(test));
-  Serial.println(test.statuss);
-  if()
+  if(compareMac(mac_addr,MacAddress3)){
+    memcpy(&repin, incomingData, sizeof(repin));
+    if(repin.statuss == 0){
+      Serial.println("register");
+      mode = 2;
+    }else if(repin.statuss == 1){
+      Serial.println("reste");
+      mode = 1;
+    }else if(repin.statuss == 2){
+      Serial.print("forget card");
+      mode = 0;
+    }else if(repin.statuss == 3){
+      Serial.println("reset Complete");
+      mode = 3;
+    }else if(repin.statuss == 4){
+      Serial.println("register Complete");
+      oled_tap_card = 0;
+      mode = 3;
+    }else if(repin.statuss == 5){
+      Serial.println("Open");
+      mode = 0;
+      }
+  }
+  if(compareMac(mac_addr,MacAddress4)){
+     Serial.println("Close");
+     mode = 3;
+  }
 }
-int mode = 0;
+
 void setup() {
   int mode = 0 ;
   SPI.begin(); // init SPI bus
@@ -189,17 +236,31 @@ void setup() {
 }
 
 void loop() {
-
-  if(mode == 0){//oFF รอ Status Choon
-    for(int i = 0 ; i<totalTags; i++){
-      Serial.print("uid: ");
-      Serial.println(tags[i].uid);
-      mode = 1;
-    }
-    
-  }
   
+  if(mode == 0){//oFF รอ Status Choon
+    if(mode0 == 0){
+      Serial.println("mode0");
+      Serial.println("mode0");
+      mode0 = 1;
+      mode1 = 1;
+      oled_tap_card = 0;
+    }
+   }
+    
   if(mode == 1 ){
+    mode0 = 0;
+    if(mode1 == 0){
+      oled.statuss = 5;
+      esp_err_t result1 = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(oled));
+      if (result1 == ESP_OK ){
+           Serial.println("Sent with success");
+           mode1 = 1;
+          }
+      else {
+           Serial.println("Error sending the data");
+           }
+           delay(2000);
+    }
       if (rfid.PICC_IsNewCardPresent()) { // new tag is available
         if (rfid.PICC_ReadCardSerial()) { // NUID has been readed
 
@@ -220,45 +281,40 @@ void loop() {
         int Status = checkStatus(uidString);
         if(Status == 0){
           Serial.println("Pls Register");
-          mode = 2;
+          oled.statuss = 0;
+          esp_err_t result = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(oled));
+          if (result == ESP_OK) {
+              Serial.println("Sent with success");
+            }
+            else {
+              Serial.println("Error sending the data");
+            }
+              delay(2000);
         }else if(Status == 1){
-          Serial.println("Reset Succes");
           clearstatus(uidString.c_str());
-          mode = 2;
+          pin.statuss = 1;
+          esp_err_t result1 = esp_now_send(MacAddress3, (uint8_t *) &pin, sizeof(send_mode1));
+          if (result1 == ESP_OK) {
+              Serial.println("Sent with success");
+              }
+          else{
+               Serial.println("Error sending the data");
+               }
+            delay(500);
+            mode = 0;
         }else if(Status == 3){
           Serial.print("You Not Owner");
-          mode = 1;
-        }
-//          for (int i = 0; i < rfid.uid.size; i++) {
-//            if (rfid.uid.uidByte[i] < 0x10) {
-//            uidString += "0"; // Add a leading zero if necessary
-//            Serial.println("In if +0 : ");
-//            Serial.println(rfid.uid.uidByte[i]);
-//            }
-//            Serial.print("rfid.uid.uidByte[i] : ");
-//            Serial.println(rfid.uid.uidByte[i]);
-//            uidString += String(rfid.uid.uidByte[i], HEX);
-//            Serial.print("UidString:");
-//            Serial.println(uidString);
-//          }
-//          
-//          uidString.replace(" ", ""); // Remove spaces from uidString
-
-//          bool they_match = false;
-//
-//          for(int i = 0 ; i < totalTags ; i++){
-//              if(uidString == tags[i].uid){
-//                clearstatus(uidString.c_str());
-//                break;
-//             
-//              }
-//          }
-//        
-//        Serial.print(F("Done"));
-//        Serial.println();
-        
-//        mode = 1 ;
-
+          oled.statuss = 1;
+          esp_err_t result = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(oled));
+          if (result == ESP_OK) {
+              Serial.println("Sent with success");
+            }
+            else {
+              Serial.println("Error sending the data");
+            }
+            delay(500);
+            mode = 1;
+          }
         rfid.PICC_HaltA(); // halt PICC
         rfid.PCD_StopCrypto1(); // stop encryption on PCD
       }
@@ -267,6 +323,15 @@ void loop() {
 
 
   if(mode == 2){ // register 
+    mode0 = 0;
+    mode1 = 1;
+    int count = 0;
+    for(int i = 0 ; i< totalTags ; i++){
+      if(tags[i].stade == 2){
+        count++;
+      }
+    }
+    if( count == 0){
     if (rfid.PICC_IsNewCardPresent()) { // new tag is available
       if (rfid.PICC_ReadCardSerial()) { // NUID has been readed
 
@@ -284,24 +349,52 @@ void loop() {
           uidString += String(rfid.uid.uidByte[i], HEX);
         }
         Serial.println();
-      
         uidString.replace(" ", "");
         for(int i = 0 ; i < totalTags ; i++){
           if(uidString == tags[i].uid){
             tags[i].stade =2;
             Serial.print("register Succere");
-            mode = 3;
-            delay(5000);
           }
         }
+       pin.statuss = 1;
+       esp_err_t result1 = esp_now_send(MacAddress3, (uint8_t *) &pin, sizeof(send_mode1));
+       if (result1 == ESP_OK) {
+           Serial.println("Sent with success");
+           }
+           else {
+             Serial.println("Error sending the data");
+            }
+              delay(2000);
+       mode = 0;
       }
     }
+    }else{
+      Serial.println("Please reset");
+      oled.statuss = 6;
+      esp_err_t result1 = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(oled));
+      if (result1 == ESP_OK ) {
+           Serial.println("Sent with success");
+           }
+           else {
+             Serial.println("Error sending the data");
+            }
+              delay(2000);
   }
-
+ }
+  
   if(mode == 3){
+    delay(1000);
+    mode1 = 1;
+    mode0 = 0;
+    oled.statuss = 5;
+      if(oled_tap_card == 0){
+        esp_err_t result1 = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(oled));
+        oled_tap_card = 1;
+      }
     if (rfid.PICC_IsNewCardPresent()) { // new tag is available
       if (rfid.PICC_ReadCardSerial()) { // NUID has been readed
 
+        oled_tap_card = 1;
         MFRC522::PICC_Type piccType = rfid.PICC_GetType(rfid.uid.sak);
         Serial.print("RFID/NFC Tag Type: ");
         Serial.println(rfid.PICC_GetTypeName(piccType));
@@ -328,10 +421,12 @@ void loop() {
 
 
         bool they_match = false;
+        int countcard = 0;
       
         for(int i = 0 ; i < totalTags ; i++){
 
           if(tags[i].stade == 2 ){//บอกว่าบัตรได้ทำการลงทะเบียนเเล้ว เเละรหัสถูกต้อง
+            countcard++;
             if(uidString == tags[i].uid){
 
               Serial.println(tags[i].name);
@@ -346,33 +441,69 @@ void loop() {
           Serial.print(F("Access Granted!")); // ส่ง Olde
           // ================== ส่งข้อมูล ================================
 //          led.statuss = 1;
-          pin.statuss = 1;
-//          servo.statuss = 1;
-//          esp_err_t result = esp_now_send(MacAddress1, (uint8_t *) &led, sizeof(send_mode1)); //mode 1 reset
+          pin.statuss = 2;
+          servo.statuss = 0;
+          Serial.println("Please reset");
+          oled.statuss = 7;
           esp_err_t result1 = esp_now_send(MacAddress3, (uint8_t *) &pin, sizeof(send_mode1)); // pin off
-//          esp_err_t result2 = esp_now_send(MacAddress4, (uint8_t *) &serovo, sizeof(send_mode1)); // servo open
-          if (result1 == ESP_OK) {
+           if (result1 == ESP_OK){
+           Serial.println("Sent with success pin");
+           }
+           else {
+             Serial.println("Error sending the data");
+            }
+              delay(500);
+          esp_err_t result2 = esp_now_send(MacAddress4, (uint8_t *) &servo, sizeof(send_servo1)); // servo open
+           if (result2 == ESP_OK){
+           Serial.println("Sent with success servo");
+           }
+           else {
+             Serial.println("Error sending the data servo");
+            }
+              delay(500);
+          esp_err_t result3 = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(send_mode1));// oled
+           if (result3 == ESP_OK){
+           Serial.println("Sent with success oled");
+           }
+           else {
+             Serial.println("Error sending the data oled");
+            }
+              delay(2000);
+          mode = 0;  
+        }else if(countcard == 0){
+          Serial.println("register first");
+          oled.statuss = 0;
+          esp_err_t result = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(oled));
+          if (result == ESP_OK) {
+              Serial.println("Sent with success");
+            }
+            else {
+              Serial.println("Error sending the data");
+            }
+              delay(500);
+          }
+        else{ 
+          oled.statuss = 8;
+          esp_err_t result = esp_now_send(MacAddress2, (uint8_t *) &oled, sizeof(send_mode1));
+          if (result == ESP_OK ){
            Serial.println("Sent with success");
            }
            else {
              Serial.println("Error sending the data");
             }
-              delay(2000);
-            mode =1 ;
-        }
-        else
-        { 
+          delay(2000);
           Serial.print(F("Access Denied!"));
           Serial.println();
           Serial.print(F("คุณยังไม่ได้ลงทะเบียน"));
           digitalWrite(17, HIGH); 
           mode = 3;
         }
+          oled_tap_card = 0;
 
         rfid.PICC_HaltA(); // halt PICC
         rfid.PCD_StopCrypto1(); // stop encryption on PCD
+        }
       }
     }
-  }
 }
  
